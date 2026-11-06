@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pmd:
+    name: PMD (Apex)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run PMD
+        id: pmd
+        uses: pmd/pmd-github-action@v2
+        with:
+          version: '7.10.0'
+          sourcePath: 'force-app'
+          rulesets: 'pmd/ruleset.xml'
+          analyzeModifiedFilesOnly: false
+      - name: Fail on violations
+        if: steps.pmd.outputs.violations != 0
+        run: |
+          echo "PMD found ${{ steps.pmd.outputs.violations }} violation(s)"
+          exit 1
+
+  gate:
+    name: Org credentials present?
+    runs-on: ubuntu-latest
+    outputs:
+      has_org: ${{ steps.check.outputs.has_org }}
+    steps:
+      - id: check
+        run: echo "has_org=${{ secrets.SF_AUTH_URL != '' }}" >> "$GITHUB_OUTPUT"
+
+  validate:
+    name: Deploy and test
+    needs: gate
+    if: needs.gate.outputs.has_org == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+      - name: Authenticate
+        run: |
+          printf '%s' "${{ secrets.SF_AUTH_URL }}" > auth.txt
+          sf org login sfdx-url --sfdx-url-file auth.txt --alias target
+          rm auth.txt
+      - name: Deploy
+        run: sf project deploy start --target-org target --wait 20
+      - name: Run tests
+        run: sf apex run test --target-org target --test-level RunLocalTests --code-coverage --result-format human --wait 20

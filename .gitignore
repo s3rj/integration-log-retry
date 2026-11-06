@@ -1,0 +1,19 @@
+# Salesforce CLI
+.sf/
+.sfdx/
+.localdevserver/
+deploy-options.json
+
+# Node
+node_modules/
+
+# Test and tool output
+coverage/
+test-results/
+pmd-report.*
+*.log
+
+# OS and editors
+.DS_Store
+.vscode/
+.idea/

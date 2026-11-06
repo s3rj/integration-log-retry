@@ -1,0 +1,10 @@
+{
+  "orgName": "integration-log-retry",
+  "edition": "Developer",
+  "features": [],
+  "settings": {
+    "lightningExperienceSettings": {
+      "enableS1DesktopEnabled": true
+    }
+  }
+}

@@ -1,0 +1,4 @@
+SELECT Name, Integration__c, Operation__c, Status__c, Attempt__c, Max_Attempts__c, HTTP_Status__c, Duration_ms__c, Next_Attempt_At__c, Completed_At__c, Error_Message__c
+FROM Integration_Log__c
+ORDER BY CreatedDate DESC
+LIMIT 20
