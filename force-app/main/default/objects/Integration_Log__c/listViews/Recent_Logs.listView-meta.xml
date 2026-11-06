@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListView xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Recent_Logs</fullName>
+    <columns>NAME</columns>
+    <columns>Integration__c</columns>
+    <columns>Operation__c</columns>
+    <columns>Status__c</columns>
+    <columns>Attempt__c</columns>
+    <columns>HTTP_Status__c</columns>
+    <columns>Duration_ms__c</columns>
+    <columns>Record_Id__c</columns>
+    <columns>Completed_At__c</columns>
+    <columns>CREATED_DATE</columns>
+    <filterScope>Everything</filterScope>
+    <label>Recent Logs</label>
+</ListView>

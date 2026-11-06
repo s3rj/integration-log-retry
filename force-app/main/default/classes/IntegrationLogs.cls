@@ -8,6 +8,7 @@ public without sharing class IntegrationLogs {
     public static final String STATUS_FAILED = 'Failed';
     public static final String STATUS_HANDLER_FAILED = 'Handler Failed';
     public static final Set<String> ACTIVE_STATUSES = new Set<String>{ STATUS_QUEUED, STATUS_RETRYING };
+    public static final Set<String> FINISHED_STATUSES = new Set<String>{ STATUS_SUCCEEDED, STATUS_FAILED, STATUS_HANDLER_FAILED };
 
     public static final Integer BODY_MAX = 131072;
     public static final Integer ERROR_MAX = 32768;
@@ -27,6 +28,18 @@ public without sharing class IntegrationLogs {
             Job_Class__c = className(job),
             Job_Payload__c = clip(JSON.serialize(job), BODY_MAX)
         );
+    }
+
+    /** Records which queueable holds the logs, so the sweeper can tell a long queue from a lost job. */
+    public static void recordJob(List<Id> logIds, Id jobId) {
+        if (jobId == null || logIds == null || logIds.isEmpty()) {
+            return;
+        }
+        List<Integration_Log__c> logs = new List<Integration_Log__c>();
+        for (Id logId : logIds) {
+            logs.add(new Integration_Log__c(Id = logId, Async_Job_Id__c = jobId));
+        }
+        update logs;
     }
 
     /** The Apex class name of an object instance, as Type.forName() expects it. */

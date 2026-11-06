@@ -1,8 +1,9 @@
 /**
  * Sample job: posts a small JSON document to the Echo integration's endpoint. Deploy, assign the permission
  * set, and run scripts/apex/enqueue-echo.apex to see a log go Queued -> Succeeded against a real endpoint.
+ * It also implements IntegrationRecordJob, so a Flow can queue it with the "Enqueue integration job" action.
  */
-public with sharing class EchoJob extends IntegrationJobBase {
+public with sharing class EchoJob extends IntegrationJobBase implements IntegrationRecordJob {
     public Id subjectId;
     public String message;
 
@@ -14,6 +15,14 @@ public with sharing class EchoJob extends IntegrationJobBase {
     public EchoJob(Id subjectId, String message) {
         this.subjectId = subjectId;
         this.message = message;
+    }
+
+    /** Called by the Flow action with the record the flow is about. */
+    public void forRecord(Id recordId) {
+        subjectId = recordId;
+        if (message == null) {
+            message = 'echo for ' + recordId;
+        }
     }
 
     public override String integrationName() {

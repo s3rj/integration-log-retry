@@ -12,6 +12,8 @@ private class IntegrationSettingsTest {
         Assert.isFalse(setting.retryableStatuses.contains(400), '400 is not retryable by default');
         Assert.isTrue(setting.active, 'active by default');
         Assert.isNull(setting.endpoint, 'no endpoint');
+        Assert.areEqual(30, setting.retentionDays, 'default retention for successes');
+        Assert.areEqual(90, setting.failedRetentionDays, 'default retention for failures');
     }
 
     @IsTest
@@ -32,11 +34,15 @@ private class IntegrationSettingsTest {
             Base_Delay_Minutes__c = null,
             Timeout_Seconds__c = 500,
             Retryable_Status_Codes__c = '429, 503',
-            Active__c = false
+            Active__c = false,
+            Retention_Days__c = 7,
+            Failed_Retention_Days__c = 0
         );
 
         IntegrationSettings.Setting setting = new IntegrationSettings.Setting(record);
 
+        Assert.areEqual(7, setting.retentionDays, 'retention from the record');
+        Assert.areEqual(90, setting.failedRetentionDays, 'zero retention falls back to the default');
         Assert.areEqual(3, setting.maxAttempts, 'zero attempts falls back to the default');
         Assert.areEqual(1, setting.baseDelayMinutes, 'blank delay falls back to the default');
         Assert.areEqual(120, setting.timeoutSeconds, 'timeout capped at the platform maximum');

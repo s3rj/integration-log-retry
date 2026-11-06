@@ -47,7 +47,9 @@ public without sharing class IntegrationQueueable implements Queueable, Database
         if (Test.isRunningTest()) {
             return null;
         }
-        return System.enqueueJob(new IntegrationQueueable(ids), IntegrationBackoff.enqueueDelay(delayMinutes));
+        Id jobId = System.enqueueJob(new IntegrationQueueable(ids), IntegrationBackoff.enqueueDelay(delayMinutes));
+        IntegrationLogs.recordJob(ids, jobId);
+        return jobId;
     }
 
     /** Runs after the queueable, even when it died from a limit exception; counts the attempt and queues the retry. */

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<QuickAction xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Try the integration again: one more attempt for a Failed log, a handler re-run for a Handler Failed log, an immediate attempt for a Retrying log.</description>
+    <flowDefinition>Retry_Integration_Log</flowDefinition>
+    <label>Retry</label>
+    <optionsCreateFeedItem>false</optionsCreateFeedItem>
+    <type>Flow</type>
+</QuickAction>

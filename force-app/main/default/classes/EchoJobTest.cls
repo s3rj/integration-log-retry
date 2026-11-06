@@ -21,6 +21,11 @@ private class EchoJobTest {
         Assert.areEqual(UserInfo.getUserId(), job.recordId(), 'record id');
         Assert.isNull(new EchoJob().dedupKey(), 'no subject, no key');
         Assert.isNull(job.isRetryable(null), 'defers to the integration policy');
+
+        EchoJob fromFlow = new EchoJob();
+        fromFlow.forRecord(UserInfo.getUserId());
+        Assert.areEqual(UserInfo.getUserId(), fromFlow.subjectId, 'the Flow action hands over the record');
+        Assert.isTrue(fromFlow.message.contains(UserInfo.getUserId()), 'default message names the record');
     }
 
     @IsTest

@@ -45,7 +45,8 @@ public without sharing class IntegrationDispatcher {
             insert fresh;
             List<Id> freshIds = new List<Id>(new Map<Id, Integration_Log__c>(fresh).keySet());
             lastQueued = freshIds;
-            System.enqueueJob(new IntegrationQueueable(freshIds));
+            Id jobId = System.enqueueJob(new IntegrationQueueable(freshIds));
+            IntegrationLogs.recordJob(freshIds, jobId);
         }
         List<Id> result = new List<Id>();
         for (Object slot : slots) {

@@ -5,6 +5,8 @@ public with sharing class IntegrationSettings {
     public static final Integer DEFAULT_MAX_ATTEMPTS = 3;
     public static final Integer DEFAULT_BASE_DELAY_MINUTES = 1;
     public static final Integer DEFAULT_TIMEOUT_SECONDS = 30;
+    public static final Integer DEFAULT_RETENTION_DAYS = 30;
+    public static final Integer DEFAULT_FAILED_RETENTION_DAYS = 90;
     public static final Set<Integer> DEFAULT_RETRYABLE_STATUSES = new Set<Integer>{ 408, 429, 500, 502, 503, 504 };
 
     public class Setting {
@@ -15,6 +17,10 @@ public with sharing class IntegrationSettings {
         public String endpoint { get; private set; }
         public Set<Integer> retryableStatuses { get; private set; }
         public Boolean active { get; private set; }
+        /** Days a Succeeded log is kept after completion. */
+        public Integer retentionDays { get; private set; }
+        /** Days a Failed or Handler Failed log is kept after completion. */
+        public Integer failedRetentionDays { get; private set; }
 
         /** Defaults for an integration with no metadata record. */
         public Setting(String name) {
@@ -24,6 +30,8 @@ public with sharing class IntegrationSettings {
             this.timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
             this.retryableStatuses = DEFAULT_RETRYABLE_STATUSES.clone();
             this.active = true;
+            this.retentionDays = DEFAULT_RETENTION_DAYS;
+            this.failedRetentionDays = DEFAULT_FAILED_RETENTION_DAYS;
         }
 
         public Setting(Integration_Setting__mdt record) {
@@ -39,6 +47,12 @@ public with sharing class IntegrationSettings {
             }
             if (String.isNotBlank(record.Retryable_Status_Codes__c)) {
                 retryableStatuses = parseStatuses(record.Retryable_Status_Codes__c);
+            }
+            if (record.Retention_Days__c != null && record.Retention_Days__c >= 1) {
+                retentionDays = record.Retention_Days__c.intValue();
+            }
+            if (record.Failed_Retention_Days__c != null && record.Failed_Retention_Days__c >= 1) {
+                failedRetentionDays = record.Failed_Retention_Days__c.intValue();
             }
             endpoint = record.Endpoint__c;
             active = record.Active__c;
@@ -64,6 +78,12 @@ public with sharing class IntegrationSettings {
             active = value;
             return this;
         }
+
+        public Setting withRetention(Integer succeededDays, Integer failedDays) {
+            retentionDays = succeededDays;
+            failedRetentionDays = failedDays;
+            return this;
+        }
     }
 
     @TestVisible
@@ -73,20 +93,17 @@ public with sharing class IntegrationSettings {
     /** The setting for an integration name (case-insensitive). Unconfigured names get defaults. */
     public static Setting get(String integrationName) {
         String key = integrationName == null ? '' : integrationName.toLowerCase();
-        if (overrides != null) {
-            return overrides.containsKey(key) ? overrides.get(key) : new Setting(integrationName);
+        Map<String, Setting> settings = all();
+        return settings.containsKey(key) ? settings.get(key) : new Setting(integrationName);
+    }
+
+    /** The shortest retention any integration uses, defaults included: the purge batch's query horizon. */
+    public static Integer shortestRetentionDays() {
+        Integer shortest = Math.min(DEFAULT_RETENTION_DAYS, DEFAULT_FAILED_RETENTION_DAYS);
+        for (Setting setting : all().values()) {
+            shortest = Math.min(shortest, Math.min(setting.retentionDays, setting.failedRetentionDays));
         }
-        if (cache == null) {
-            cache = new Map<String, Setting>();
-            for (Integration_Setting__mdt record : [
-                SELECT DeveloperName, Max_Attempts__c, Base_Delay_Minutes__c, Retryable_Status_Codes__c, Timeout_Seconds__c, Endpoint__c, Active__c
-                FROM Integration_Setting__mdt
-                LIMIT 1000
-            ]) {
-                cache.put(record.DeveloperName.toLowerCase(), new Setting(record));
-            }
-        }
-        return cache.containsKey(key) ? cache.get(key) : new Setting(integrationName);
+        return shortest;
     }
 
     /** Parses "408, 429,500" into a set of status codes, ignoring anything that is not a number. */
@@ -99,5 +116,23 @@ public with sharing class IntegrationSettings {
             }
         }
         return statuses;
+    }
+
+    private static Map<String, Setting> all() {
+        if (overrides != null) {
+            return overrides;
+        }
+        if (cache == null) {
+            cache = new Map<String, Setting>();
+            for (Integration_Setting__mdt record : [
+                SELECT DeveloperName, Max_Attempts__c, Base_Delay_Minutes__c, Retryable_Status_Codes__c, Timeout_Seconds__c, Endpoint__c, Active__c,
+                    Retention_Days__c, Failed_Retention_Days__c
+                FROM Integration_Setting__mdt
+                LIMIT 1000
+            ]) {
+                cache.put(record.DeveloperName.toLowerCase(), new Setting(record));
+            }
+        }
+        return cache;
     }
 }

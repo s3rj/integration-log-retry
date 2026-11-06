@@ -1,14 +1,26 @@
 # integration-log-retry
 
-A small framework for outbound Salesforce integrations that fail for boring reasons: a log record per unit of work, bulk-safe queueable execution, exponential-backoff retries, a platform event when work stops for good, and a scheduled sweeper so nothing is ever stranded.
+A small framework for outbound Salesforce integrations that fail for boring reasons: a log record per unit of work, bulk-safe queueable execution, exponential-backoff retries, a Retry button for the rest, a Flow action so admins can wire integrations without new Apex, a platform event when work stops for good, and the housekeeping that keeps it all running a year later.
 
-Most orgs call out from a trigger or a flow, catch the exception, and hope. When the endpoint returns a 503 at 2 a.m., the record is silently never sent, and someone writes a "re-run the sync" script three months later. This project replaces that with a pattern I have run in production: **log first, then queue, then retry with a memory.**
+## Why an org needs it
+
+Most orgs call out from a trigger or a flow, catch the exception, and hope. When the ERP returns a 503 at 2 a.m., the order is silently never sent; nobody finds out until finance reconciles; and someone writes a "re-run the sync" script three months later. Each integration grows its own logging object, its own retry loop, and its own gaps. This project replaces that with one pattern: **log first, then queue, then retry with a memory.**
+
+## What your org gets
+
+- **Every outbound call is a record.** `Integration_Log__c` holds what was sent, what came back, how long it took, how many attempts, and why it stopped. The **Integration Logs** tab ships with **Needs Attention** (Failed and Handler Failed), **In Flight** (Queued and Retrying), and **Recent Logs** list views, so the support desk and the integration owner look at the same thing.
+- **Failures retry themselves.** Timeouts, 429s, and 5xxs retry with exponential backoff; the policy is metadata per integration. A sweeper every ten minutes re-queues retries that are due and any Queued log whose queueable was aborted, purged from the flex queue, or lost to a deploy, so a lost job is never lost work.
+- **A Retry button for everything else.** On the Integration Log record, **Retry** gives a Failed log exactly one more attempt now; for a Handler Failed log (the call succeeded, the post-processing threw) it re-runs the handler with the stored response without sending the request again; for a Retrying log it skips the wait. The same **Retry integration logs** action is available to any Flow.
+- **Integrations from Flow, without new Apex.** The **Enqueue integration job** action takes a job class and a record: a record-triggered flow on Opportunity Closed Won can queue `SendOrderJob` with `{!$Record.Id}`, with the framework's retries and deduplication, and the admin never opens the Developer Console.
+- **Alerting where you already have it.** When work stops for good, the framework publishes `Integration_Failure__e`. A platform-event-triggered flow posts to Slack, opens a case, or flags the record; no polling.
+- **Housekeeping.** A daily purge deletes Succeeded logs after 30 days and failures after 90 (both per integration), so the object stays small and storage is not spent on last year's successful syncs.
+- **Safe by construction.** Callouts run before any DML, so handlers can update records without "uncommitted work pending"; a dedup key means a trigger that fires twice sends once; a Finalizer catches the limit exception a try/catch cannot.
 
 ## How it works
 
 ```
-IntegrationDispatcher.enqueue(job)
-   │  inserts Integration_Log__c (Queued) holding the job as JSON
+IntegrationDispatcher.enqueue(job)            Flow: "Enqueue integration job"
+   │  inserts Integration_Log__c (Queued) holding the job as JSON, records the queueable
    ▼
 IntegrationQueueable (10 logs per execution)
    │  all callouts first ──► IntegrationRunner.run()
@@ -17,25 +29,34 @@ IntegrationQueueable (10 logs per execution)
    ├─ retryable failures ────► Retrying + Next Attempt At, chain with backoff (≤10 min)
    └─ exhausted / non-retryable ► Failed + Integration_Failure__e
 IntegrationRetrySweeper (every 10 minutes)
-      re-queues Retrying logs that are due, including any whose chain was lost
+   ├─ re-queues Retrying logs that are due, including any whose chain was lost
+   └─ re-queues Queued logs older than 15 minutes whose queueable is gone
+IntegrationRetry (Retry button / Flow action)
+   ├─ Failed ──────────────► one more attempt, now
+   ├─ Handler Failed ──────► re-run onSuccess with the stored response, no callout
+   └─ Retrying ────────────► attempt now
+IntegrationLogPurge (daily, 02:00)
+      deletes Succeeded logs after Retention Days, failures after Failed Retention Days
 ```
 
-- **The log is the unit of work.** `Integration_Log__c` stores the job's class and JSON state, so every attempt re-creates the job fresh (new tokens, current timestamps) and a retry survives the end of the transaction, the flex queue, and a lost chain.
+- **The log is the unit of work.** `Integration_Log__c` stores the job's class and JSON state, so every attempt re-creates the job fresh (new tokens, current timestamps) and a retry survives the end of the transaction, the flex queue, and a lost chain. The log also records the queueable that holds it, which is how the sweeper tells a long queue from a dead job.
 - **Callouts before DML.** A callout after DML in the same transaction fails with "uncommitted work pending", so the runner performs every callout in the batch first and only then writes logs and runs handlers, which are free to update records.
-- **Retry policy lives in metadata.** `Integration_Setting__mdt` per integration: max attempts, base delay, retryable status codes, timeout, endpoint. Callout exceptions (timeouts, DNS, TLS) always retry; a job can veto or force a retry for a specific response.
+- **Retry policy lives in metadata.** `Integration_Setting__mdt` per integration: max attempts, base delay, retryable status codes, timeout, endpoint, retention. Callout exceptions (timeouts, DNS, TLS) always retry; a job can veto or force a retry for a specific response.
 - **Exponential backoff** doubles the base delay after every failed attempt. The queueable delay is capped at the platform's ten minutes; later retries are the sweeper's job.
-- **Idempotent enqueueing.** A job may return a dedup key; while a log with that key is active, enqueueing the same key returns that log instead of creating a second one. Triggers that fire twice stop sending twice.
-- **Failure is an event.** When work stops for good, the runner publishes `Integration_Failure__e` (integration, operation, log, record, attempts, error). Subscribe from Flow to post to Slack, open a case, or flag the record.
+- **Idempotent enqueueing.** A job may return a dedup key; while a log with that key is active, enqueueing the same key returns that log instead of creating a second one.
+- **Handler re-runs never re-send.** A Handler Failed log keeps the response it got. Fix the handler, press Retry, and the framework replays that response into `onSuccess`; the other system is not asked to create the order twice.
 - **A Finalizer for the failures you cannot catch.** If a queueable dies from a limit exception, its transaction rolls back and nothing would be recorded. The attached `Recovery` finalizer counts the attempt, records the reason, and schedules the retry.
 
 ## Write a job
 
 ```apex
-public with sharing class SendOrderJob extends IntegrationJobBase {
+public with sharing class SendOrderJob extends IntegrationJobBase implements IntegrationRecordJob {
     public Id orderId;                 // public fields are serialized; keep them small
 
     public SendOrderJob() { super(); } // required: jobs are re-created from JSON
     public SendOrderJob(Id orderId) { this.orderId = orderId; }
+
+    public void forRecord(Id recordId) { orderId = recordId; }           // what the Flow action calls
 
     public override String integrationName() { return 'ERP'; }          // Integration_Setting__mdt.ERP
     public override String operation() { return 'send-order'; }
@@ -59,13 +80,15 @@ public with sharing class SendOrderJob extends IntegrationJobBase {
 }
 ```
 
-Queue it from a trigger handler, a flow-invoked Apex action, or anonymous Apex:
+Queue it from a trigger handler or anonymous Apex:
 
 ```apex
 IntegrationDispatcher.enqueueAll(jobsForChangedOrders);   // one transaction, one queueable
 ```
 
-Rules for jobs: a public no-argument constructor, JSON-serializable public fields, and no DML in `buildRequest`. Everything else is optional; `IntegrationJobBase` supplies defaults.
+Or from Flow, with no further code: add the **Enqueue integration job** action, set **Job class** to `SendOrderJob` and **Record Id** to `{!$Record.Id}`; **Parameters (JSON)** fills any other public field (`{"reason":"closed won"}`). Implementing `IntegrationRecordJob` (one method, `forRecord`) is what makes a job available to Flow.
+
+Rules for jobs: a public no-argument constructor, JSON-serializable public fields, no DML in `buildRequest`, and an `onSuccess` that can be replayed (a Retry may run it again with the same response). Everything else is optional; `IntegrationJobBase` supplies defaults.
 
 ## Configure an integration
 
@@ -78,6 +101,8 @@ Rules for jobs: a public no-argument constructor, JSON-serializable public field
 | Timeout (seconds) | Applied to every attempt (max 120) | 30 |
 | Endpoint | Handed to `buildRequest`; use a named credential (`callout:Name/path`) | |
 | Active | Unchecked: `enqueue()` throws instead of queueing | checked |
+| Retention Days | Succeeded logs are deleted this long after completion | 30 |
+| Failed Retention Days | Failed and Handler Failed logs are deleted this long after completion | 90 |
 
 Max attempts are copied onto each log when it is created, so changing a setting never alters work already in flight.
 
@@ -86,22 +111,26 @@ Max attempts are copied onto each log when it is created, so changing a setting 
 ```bash
 sf project deploy start --target-org <org>
 sf org assign permset --name Integration_Log_Admin --target-org <org>
-sf apex run --target-org <org> --file scripts/apex/schedule-sweeper.apex   # once per org: six hourly jobs, ten minutes apart
+sf apex run --target-org <org> --file scripts/apex/schedule-jobs.apex      # once per org: sweeper and purge
 sf apex run --target-org <org> --file scripts/apex/enqueue-echo.apex       # a real callout to postman-echo.com
 sf data query --target-org <org> --file scripts/soql/recent-logs.soql
 ```
 
-The sample `EchoJob` and its `Echo` setting (plus a remote site for postman-echo.com) show a log going Queued to Succeeded against a live endpoint. Delete them once you have real jobs.
+The sample `EchoJob` and its `Echo` setting (plus a remote site for postman-echo.com) show a log going Queued to Succeeded against a live endpoint; `EchoJob` also implements `IntegrationRecordJob`, so you can try the Flow action on it. Delete them once you have real jobs.
 
-## Log statuses
+## Operate it
 
-| Status | Meaning |
-|---|---|
-| Queued | Logged, waiting for its first attempt |
-| Retrying | A retryable failure; `Next Attempt At` says when |
-| Succeeded | 2xx response; `onSuccess` ran |
-| Failed | Retries exhausted, a non-retryable response, or a job that could not be built; `Integration_Failure__e` published; `onFailure` ran |
-| Handler Failed | The callout succeeded but `onSuccess` threw; the response is kept so the handler can be fixed and re-run by hand |
+| Status | Meaning | What Retry does |
+|---|---|---|
+| Queued | Logged, waiting for its first attempt | Nothing; the sweeper re-queues it if its queueable is gone |
+| Retrying | A retryable failure; `Next Attempt At` says when | Attempts now |
+| Succeeded | 2xx response; `onSuccess` ran | Nothing |
+| Failed | Retries exhausted, a non-retryable response, or a job that could not be built; `Integration_Failure__e` published; `onFailure` ran | One more attempt, now |
+| Handler Failed | The callout succeeded but `onSuccess` threw; the response is kept | Re-runs `onSuccess` with the stored response; no callout |
+
+- **Alerting:** build a platform-event-triggered flow on `Integration_Failure__e` (integration, operation, log, record, attempts, error). Post to a channel, create a case, or set a flag on the record for the account team.
+- **Pausing an integration:** uncheck **Active** on its setting; `enqueue()` refuses new work with a clear error while in-flight logs finish.
+- **Watching the queue:** the **In Flight** list view, and `Async Job Id` on each log for **Setup > Apex Jobs**.
 
 ## Limits and trade-offs
 
@@ -119,9 +148,9 @@ scripts/validate.sh <org alias>                       # deploy and run all local
 pmd check -d force-app -R pmd/ruleset.xml -f text     # static analysis, same ruleset as CI
 ```
 
-Validated in a Developer Edition org on API 68.0: 38 tests, 100% coverage on every class but one (98%), and a live `EchoJob` run that logged HTTP 200 from postman-echo.com in 98 ms.
+Validated in a Developer Edition org on API 68.0: 52 tests, 93–100% coverage per class, a live `EchoJob` queued through the Flow action that logged HTTP 200 from postman-echo.com in 73 ms, and a live Retry of a Failed log that re-sent the request and succeeded.
 
-Tests use `SequenceCalloutMock` (scripted status codes or exceptions) and `RecordingJob` (a job that can be told to misbehave). Logs are inserted before `Test.startTest()` and the runner is called once inside it, because a callout after DML in one transaction is an error, which is also why the runner never runs in the enqueueing transaction. Chaining is recorded rather than executed in tests, where only one queueable may run; the `Recovery` finalizer is exercised directly with a stub `FinalizerContext`.
+Tests use `SequenceCalloutMock` (scripted status codes or exceptions) and `RecordingJob` (a job that can be told to misbehave). Logs are inserted before `Test.startTest()` and the runner is called once inside it, because a callout after DML in one transaction is an error, which is also why the runner never runs in the enqueueing transaction. Chaining is recorded rather than executed in tests, where only one queueable may run; the `Recovery` finalizer is exercised directly with a stub `FinalizerContext`; stranded-log detection is tested against real aborted and queued `AsyncApexJob` records.
 
 ## License
 

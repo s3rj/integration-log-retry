@@ -67,16 +67,52 @@ public without sharing class IntegrationRunner {
         return outcome;
     }
 
+    /**
+     * Re-runs onSuccess for Handler Failed logs with the stored response and no new callout: the request reached
+     * the other side once and must not be sent twice. Returns the resulting status per log.
+     */
+    public static Map<Id, String> rerunHandlers(List<Id> logIds) {
+        Map<Id, String> outcomes = new Map<Id, String>();
+        List<Integration_Log__c> logs = [
+            SELECT Id, Integration__c, Operation__c, Status__c, Attempt__c, Max_Attempts__c, Record_Id__c, Job_Class__c, Job_Payload__c, HTTP_Status__c, Response_Body__c
+            FROM Integration_Log__c
+            WHERE Id IN :logIds AND Status__c = :IntegrationLogs.STATUS_HANDLER_FAILED
+        ];
+        for (Integration_Log__c log : logs) {
+            try {
+                IntegrationJob job = rebuild(log);
+                HttpResponse response = new HttpResponse();
+                response.setStatusCode(log.HTTP_Status__c == null ? 200 : log.HTTP_Status__c.intValue());
+                if (log.Response_Body__c != null) {
+                    response.setBody(log.Response_Body__c);
+                }
+                job.onSuccess(response, log);
+                log.Status__c = IntegrationLogs.STATUS_SUCCEEDED;
+                log.Error_Message__c = null;
+            } catch (Exception e) {
+                log.Error_Message__c = IntegrationLogs.clip('Handler failed again: ' + e.getTypeName() + ': ' + e.getMessage(), IntegrationLogs.ERROR_MAX);
+            }
+            outcomes.put(log.Id, log.Status__c);
+        }
+        update logs;
+        return outcomes;
+    }
+
+    /** The job as it was enqueued, re-created from the log's class name and JSON payload. */
+    public static IntegrationJob rebuild(Integration_Log__c log) {
+        Type jobType = log.Job_Class__c == null ? null : Type.forName(log.Job_Class__c);
+        if (jobType == null) {
+            throw new IntegrationDispatcher.DispatchException('Job class not found: ' + log.Job_Class__c);
+        }
+        return (IntegrationJob) JSON.deserialize(log.Job_Payload__c, jobType);
+    }
+
     private static Attempt perform(Integration_Log__c log) {
         Attempt attempt = new Attempt();
         attempt.log = log;
         attempt.setting = IntegrationSettings.get(log.Integration__c);
         try {
-            Type jobType = Type.forName(log.Job_Class__c);
-            if (jobType == null) {
-                throw new IntegrationDispatcher.DispatchException('Job class not found: ' + log.Job_Class__c);
-            }
-            attempt.job = (IntegrationJob) JSON.deserialize(log.Job_Payload__c, jobType);
+            attempt.job = rebuild(log);
             HttpRequest request = attempt.job.buildRequest(attempt.setting);
             request.setTimeout(attempt.setting.timeoutSeconds * 1000);
             log.Endpoint__c = IntegrationLogs.clip(request.getEndpoint(), IntegrationLogs.TEXT_MAX);

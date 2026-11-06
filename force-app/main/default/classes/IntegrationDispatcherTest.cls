@@ -17,11 +17,12 @@ private class IntegrationDispatcherTest {
         Id logId = IntegrationDispatcher.enqueue(new RecordingJob('a'));
 
         Integration_Log__c log = [
-            SELECT Status__c, Attempt__c, Max_Attempts__c, Integration__c, Operation__c, Direction__c, Dedup_Key__c, Job_Class__c, Job_Payload__c
+            SELECT Status__c, Attempt__c, Max_Attempts__c, Integration__c, Operation__c, Direction__c, Dedup_Key__c, Job_Class__c, Job_Payload__c, Async_Job_Id__c
             FROM Integration_Log__c
             WHERE Id = :logId
         ];
         Assert.areEqual('Queued', log.Status__c, 'queued');
+        Assert.isNotNull(log.Async_Job_Id__c, 'the queueable holding the log is recorded');
         Assert.areEqual(0, log.Attempt__c.intValue(), 'no attempts yet');
         Assert.areEqual(3, log.Max_Attempts__c.intValue(), 'max attempts copied from the setting');
         Assert.areEqual('Test', log.Integration__c, 'integration name');
