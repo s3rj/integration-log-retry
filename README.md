@@ -1,6 +1,19 @@
 # integration-log-retry
 
+[![CI](https://github.com/s3rj/integration-log-retry/actions/workflows/ci.yml/badge.svg)](https://github.com/s3rj/integration-log-retry/actions/workflows/ci.yml)
+![Apex on API 68.0](https://img.shields.io/badge/Apex-API%2068.0-00A1E0)
+![52 tests, 93 to 100% coverage per class](https://img.shields.io/badge/tests-52%20passing%2C%2093--100%25%20per%20class-brightgreen)
+[![MIT License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+
 A small framework for outbound Salesforce integrations that fail for boring reasons: a log record per unit of work, bulk-safe queueable execution, exponential-backoff retries, a Retry button for the rest, a Flow action so admins can wire integrations without new Apex, a platform event when work stops for good, and the housekeeping that keeps it all running a year later.
+
+**At a glance**
+
+- **The problem:** the ERP returns a 503 at 2 a.m., the trigger that called it swallowed the exception, and the order is never sent; nobody knows until finance reconciles.
+- **What this is:** log first, then queue, then retry with a memory. Every callout is an `Integration_Log__c` record that carries its own job as JSON, so an attempt can be repeated from a queueable, a sweeper, or a button, hours later, without the original transaction.
+- **Proof:** 52 tests, 93–100% coverage per class, validated in a Developer Edition org on API 68.0; a live job queued through the Flow action and a live Retry of a Failed log both logged HTTP 200 from postman-echo.com.
+- **Try it:** deploy, assign `Integration_Log_Admin`, run `scripts/apex/schedule-jobs.apex` and `scripts/apex/enqueue-echo.apex`, then open the Integration Logs tab and press **Retry** on anything.
+- **Where to look first:** `IntegrationRunner` (callouts first, then DML, then handlers), `IntegrationQueueable` (chunking, chaining, and the `Recovery` Finalizer), `IntegrationRetrySweeper` (due retries and stranded-work detection against `AsyncApexJob`), `IntegrationRetry` (what the button does), and `IntegrationRunnerTest` for the twelve ways an attempt can end.
 
 ## Why an org needs it
 
@@ -151,6 +164,17 @@ pmd check -d force-app -R pmd/ruleset.xml -f text     # static analysis, same ru
 Validated in a Developer Edition org on API 68.0: 52 tests, 93–100% coverage per class, a live `EchoJob` queued through the Flow action that logged HTTP 200 from postman-echo.com in 73 ms, and a live Retry of a Failed log that re-sent the request and succeeded.
 
 Tests use `SequenceCalloutMock` (scripted status codes or exceptions) and `RecordingJob` (a job that can be told to misbehave). Logs are inserted before `Test.startTest()` and the runner is called once inside it, because a callout after DML in one transaction is an error, which is also why the runner never runs in the enqueueing transaction. Chaining is recorded rather than executed in tests, where only one queueable may run; the `Recovery` finalizer is exercised directly with a stub `FinalizerContext`; stranded-log detection is tested against real aborted and queued `AsyncApexJob` records.
+
+## Part of a set
+
+Three Salesforce patterns generalized from production work and rebuilt from scratch with tests and CI, plus a CLI for the schema side:
+
+- [sandbox-data-mask](https://github.com/s3rj/sandbox-data-mask): the data in your sandboxes
+- [integration-log-retry](https://github.com/s3rj/integration-log-retry): this project, outbound callouts that log, retry, and recover
+- [hmac-webhook-receiver](https://github.com/s3rj/hmac-webhook-receiver): inbound webhooks that are verified, deduplicated, and reprocessable
+- [flow-hardcoded-id-scanner](https://github.com/s3rj/flow-hardcoded-id-scanner): a CI gate that finds hard-coded record Ids in Flow and other metadata
+
+More at [github.com/s3rj](https://github.com/s3rj).
 
 ## License
 
