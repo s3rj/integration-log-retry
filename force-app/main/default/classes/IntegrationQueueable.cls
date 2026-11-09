@@ -52,8 +52,11 @@ public without sharing class IntegrationQueueable implements Queueable, Database
         return jobId;
     }
 
-    /** Runs after the queueable, even when it died from a limit exception; counts the attempt and queues the retry. */
-    public class Recovery implements Finalizer {
+    /**
+     * Runs after the queueable, even when it died from a limit exception; counts the attempt and queues the retry.
+     * Without sharing, like the job itself: a failure must be recorded whatever the running user can see.
+     */
+    public without sharing class Recovery implements Finalizer {
         private final List<Id> logIds;
 
         public Recovery(List<Id> logIds) {
