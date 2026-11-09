@@ -15,6 +15,26 @@ A small framework for outbound Salesforce integrations that fail for boring reas
 - **Try it:** deploy, assign `Integration_Log_Admin`, run `scripts/apex/schedule-jobs.apex` and `scripts/apex/enqueue-echo.apex`, then open the Integration Logs tab and press **Retry** on anything.
 - **Where to look first:** `IntegrationRunner` (callouts first, then DML, then handlers), `IntegrationQueueable` (chunking, chaining, and the `Recovery` Finalizer), `IntegrationRetrySweeper` (due retries and stranded-work detection against `AsyncApexJob`), `IntegrationRetry` (what the button does), and `IntegrationRunnerTest` for the twelve ways an attempt can end.
 
+## What admins see
+
+Taken in the Developer Edition org the tests run in; every record below was produced by the code, not typed in.
+
+**The morning check.** Two honest failures: a 404 that was not worth retrying, and a 503 that was retried three times with exponential backoff before giving up.
+
+![The Needs Attention list view: two Failed logs, one after a 404 at attempt 1 of 3, one after a 503 at attempt 3 of 3](docs/images/needs-attention.png)
+
+**A failed log, and the Retry button.** Attempt count, HTTP status, endpoint, error, and further down the request and response bodies. Retry is a quick action backed by a two-step screen flow that calls an invocable Apex method.
+
+![An Integration Log record page: Failed, attempt 3 of 3, HTTP 503, with the Retry button in the header](docs/images/record-retry.png)
+
+**What Retry answers.** This log then succeeded on its fourth attempt once the endpoint was back.
+
+![The Retry outcome screen reads Requeued, with a legend for the other outcomes](docs/images/retry-outcome.png)
+
+**Between attempts.** The In Flight view shows when the next attempt is due; the sweeper picks the log up if its chained queueable is ever lost.
+
+![The In Flight list view: one Retrying log, attempt 1 of 3, Next Attempt At one minute later](docs/images/in-flight.png)
+
 ## Why an org needs it
 
 Most orgs call out from a trigger or a flow, catch the exception, and hope. When the ERP returns a 503 at 2 a.m., the order is silently never sent; nobody finds out until finance reconciles; and someone writes a "re-run the sync" script three months later. Each integration grows its own logging object, its own retry loop, and its own gaps. This project replaces that with one pattern: **log first, then queue, then retry with a memory.**
@@ -117,7 +137,9 @@ Rules for jobs: a public no-argument constructor, JSON-serializable public field
 | Retention Days | Succeeded logs are deleted this long after completion | 30 |
 | Failed Retention Days | Failed and Handler Failed logs are deleted this long after completion | 90 |
 
-Max attempts are copied onto each log when it is created, so changing a setting never alters work already in flight.
+Max attempts are copied onto each log when it is created, so changing a setting never alters work already in flight. The shipped layout shows every field in Setup:
+
+![The Echo Integration Setting record in Setup: endpoint, timeout, retryable status codes, max attempts, base delay, and retention](docs/images/setting-config.png)
 
 ## Install and try it
 
